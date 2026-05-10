@@ -1,0 +1,401 @@
+Exp-1 — EC2 Access
+a) Connect using PuTTY (.ppk)
+Create an EC2 with a key pair of .ppk, copy the IP of it.
+Open PuTTY, paste the IP.
+Left side: Connection → SSH → Auth → Credentials, browse the .ppk and click Open.
+If Linux login as: ec2-user, if Ubuntu login as: ubuntu.   Test: whoami (console)
+b) Convert .pem to .ppk
+Convert .pem file to .ppk using PuTTYGen, save as private key file, then follow the same process as above.
+
+c) RDP (Windows EC2)
+Create an EC2 — in security groups add RDP in the custom TCP, select OS: Windows.
+Click on Connect → using RDP client → click Get Password → upload the .pem file to decrypt.
+Click the Windows symbol and search RDP, paste the IP of the EC2.
+Login as Administrator, password: decrypted password.
+You can see the new system.
+Exp-2 — Volumes & Snapshots
+Volumes
+a) Attach a Volume
+Create an EC2, select an AZ.
+Create a volume with the same AZ, size anything.
+Attach volume to the running EC2, device name: /dev/sdf.
+Open EC2 console and run lsblk.
+b) Format and Mount the Volume
+After attaching and connecting to EC2:
+
+sudo su
+lsblk -fs
+fdisk /dev/nvme1n1    (m, n, p, , , , w)
+lsblk
+mkfs.xfs /dev/nvme1n1p1
+mkdir /mnt/vish
+mount /dev/nvme1n1p1 /mnt/vish
+df -h
+blkid /dev/nvme1n1p1
+(COPY UUID)
+nano /etc/fstab
+(inside that, last line add) =UUID=<UUID-value>   /mnt/vish   xfs   defaults,nofail   0   0
+mount -a
+reboot and check for files
+c) Move Volume to Another EC2
+Create another EC2 with the same AZ.
+Detach the volume from the old EC2 and attach to the new one.
+Connect to the new EC2 and run:
+sudo su
+mkdir /mnt/vish
+mount /dev/nvme1n1p1 /mnt/vish
+lsblk -fs
+Snapshots
+For a given volume you created, click on Actions → Create Snapshot.
+From the Snapshots section, click on Copy Snapshot and select some region.
+Switch to that region and create a volume for it from Actions.
+Attach an EC2 in that region to the created volume with the same AZ. (run lsblk if needed)
+Exp-3 — EFS (Elastic File System)
+Create 2 EC2s with 2 different availability zones and include NFS in the custom TCP.
+Create a new security group (NFS) and attach it to the EFS
+Create an EFS with only 2 availability zones.
+Open consoles of both EC2s.
+Run the following commands on both:
+sudo su
+mkdir efs
+yum install -y amazon-efs-utils
+(connect the efs with dns) efs → connect → dns → paste in console
+cd efs
+in any 1 do: nano h.txt and put text
+(it shows in the other EC2)
+EXP-4 — S3
+a) Public Access to S3 Object
+Create an S3 bucket, allow ACLs under ownership.
+Block all public access — uncheck that (very important).
+Enable versioning (better, because others need it).
+After creation: Bucket → Permissions → ACL → Public Access → right side tick.
+Upload any image, click on it → Permissions → ACL → Public Access → left and right tick.
+Properties → Copy link → open in incognito.
+b) Versioning
+Enable versioning (compulsory).
+Upload a text file, change it locally, and upload again.
+Buckets → Objects → click Show Versions → you can see both versions.
+Delete the latest version and the old version still shows up.
+c) Cross Region Replication
+Create 1 more bucket in a different region with the same process including versioning enabled.
+Go to first bucket → Management → Replication Rules.
+Status = Enable, Source bucket = Apply to all objects, Destination bucket = select the created one, IAM Role = Lab Role. Replicate existing objects → No (this option comes after creating).
+Upload any file in bucket 1 — it will automatically show in the 2nd bucket.
+d) Static Website Hosting
+Upload index.html and error.html into S3 following the normal process including ACL settings and allowing static hosting. Put index and error filenames in the fields.
+Click on index.html → Permissions → Everyone → both tick. Same with error.html.
+Bucket → Properties → scroll to Static Website Hosting → copy URL → check.
+EXP-5 — VPC
+Create a VPC, CIDR: 10.0.0.0/16.
+Create subnets:
+Public: AZ-east-1a, subnet CIDR: 10.0.1.0/24
+Private: AZ-east-1a, subnet CIDR: 10.0.2.0/24
+Create an Internet Gateway, attach the VPC (shown after creation).
+Create Route Tables:
+Public: Create → Actions → Edit Routes → Add Route → Destination: 0.0.0.0/0, Internet Gateway (custom made) → Actions → Edit Subnet Associations → add the public subnet.
+Private: Create → Actions → Edit Subnet Associations → add the private subnet.
+Public subnet → Actions → Edit Subnet Settings → Auto-assign IP (tick).
+Create a security group, add the custom VPC under creation, inbound rules: SSH, HTTP, HTTPS.
+Create an EC2 for the public subnet: Edit Network → VPC (custom), Subnet: public, select existing security group: custom made.
+Do the same for the EC2 of the private subnet.
+Connecting to both: public subnet EC2 will connect, private will not.
+Exp-6 — Bastion Server
+Follow the same process as Exp-5 until creation of the route tables.
+Create an Elastic IP.
+Create a NAT Gateway: Method of Elastic IP → Manual, select the created IP.
+Attach the NAT Gateway to the private route table.
+Create 2 EC2 instances for public and private subnets and attach the 2 subnets.
+Open the public EC2 instance and connect it via SSH. In the terminal where .pem file is located, run:
+ssh -i "key.pem" ec2-user@<public-ip>
+Open another terminal and copy the key to the public EC2:
+scp -i yourkey.pem yourkey.pem ec2-user@<public-ip>:~
+In terminal 1 (connected to public EC2), run:
+chmod 400 yourkey.pem
+Open the EC2 with private subnet and connect it via SSH command from terminal 1:
+ssh -i yourkey.pem ec2-user@<private-ip>
+After connection success, run to check internet access:
+ping google.com
+Exp-7 — S3-DynamoDB Integration
+Create an S3 bucket normally.
+Create a DynamoDB table with a partition key as id.
+Create a Lambda function: Author from scratch, Role: LabRole, Runtime: Python.
+Add trigger to Lambda: Select S3 in trigger config, select the bucket.
+In the Lambda code, put this:
+import boto3
+from uuid import uuid4
+
+def lambda_handler(event, context):
+    s3 = boto3.client("s3")
+    dynamodb = boto3.resource('dynamodb')
+    
+    # Check if the 'Records' key is present in the event
+    if 'Records' in event:
+        # Iterate over each record in the event
+        for record in event['Records']:
+            bucket_name = record['s3']['bucket']['name']
+            object_key = record['s3']['object']['key']
+            size = record['s3']['object'].get('size', -1)
+            event_name = record.get('eventName', 'Unknown')
+            event_time = record.get('eventTime', 'Unknown')
+            
+            dynamoTable = dynamodb.Table('table-name')
+            dynamoTable.put_item(
+                Item={
+                    'id': str(uuid4()), 
+                    'Bucket': bucket_name, 
+                    'Object': object_key,
+                    'Size': size, 
+                    'Event': event_name, 
+                    'EventTime': event_time
+                })
+    else:
+        # Log a message indicating that the 'Records' key is missing
+        print("No 'Records' key found in the event.")
+Click Deploy.
+Upload something in the S3 bucket, then click Explore Items in DynamoDB, click Run.
+In Lambda, show logs if asked.
+Exp-8 — SNS & SQS
+Part 1: SNS Email Notification
+Create SNS with any name, Type: Standard.
+Create subscription: Protocol: Email, Endpoint: your email.
+Confirm subscription from email.
+Publish message: Put something in subject and body, then send.
+Part 2: S3 to SNS Integration
+Create S3 bucket normally.
+Edit access policy of SNS and put this:
+{
+  "Version": "2012-10-17",
+  "Id": "example-ID",
+  "Statement": [
+    {
+      "Sid": "Example SNS topic policy",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "s3.amazonaws.com"
+      },
+      "Action": [
+        "SNS:Publish"
+      ],
+      "Resource": "SNS topic ARN",
+      "Condition": {
+        "ArnLike": {
+          "aws:SourceArn": "s3 bucket ARN"
+        },
+        "StringEquals": {
+          "aws:SourceAccount": "account id"
+        }
+      }
+    }
+  ]
+}
+Open S3 → Properties → Event Notification → Create Event Notification.
+Event name: any name, Event type: All objects create events, Destination: SNS topic.
+Test by uploading something, check email.
+Part 3: SQS Basic Operations
+Create SQS, Type: Standard, any name.
+Click Send and Receive Messages, message body: some message, click Send.
+Poll messages to see the message, you can delete also.
+Part 4: S3 → SNS → SQS → Lambda Pipeline
+Create S3, SNS, SQS normally.
+Create subscription in SNS: Protocol: SQS, Endpoint: SQS ARN.
+Add access policy in SQS by editing and putting:
+{
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "sns.amazonaws.com"
+      },
+      "Action": "sqs:SendMessage",
+      "Resource": "SQS ARN",
+      "Condition": {
+        "ArnEquals": {
+          "aws:SourceArn": "SNS ARN"
+        }
+      }
+    }
+  ]
+}
+Add access policy in SNS also:
+{
+  "Version": "2012-10-17",
+  "Id": "example-ID",
+  "Statement": [
+    {
+      "Sid": "Example SNS topic policy",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "s3.amazonaws.com"
+      },
+      "Action": [
+        "SNS:Publish"
+      ],
+      "Resource": "SNS topic ARN",
+      "Condition": {
+        "ArnLike": {
+          "aws:SourceArn": "S3 bucket ARN"
+        },
+        "StringEquals": {
+          "aws:SourceAccount": "Account ID"
+        }
+      }
+    }
+  ]
+}
+Open S3 → Properties → Event Notification → Event name: S3UploadEvent, Event type: All object create events, Destination: SNS topic.
+Test by uploading something in S3, poll messages from SQS.
+Configure Lambda: Create Lambda function normally, add trigger: SQS, select your SQS.
+Lambda code:
+def lambda_handler(event, context):
+    for record in event['Records']:
+        print("Message received from SQS:")
+        print(record['body'])
+    
+    return {
+        'statusCode': 200,
+        'body': 'Message processed successfully'
+    }
+Deploy, upload something in S3, and this will trigger everything. Watch logs in Lambda.
+Exp-9 — ELB + Auto Scaling
+Part 1: EC2 + Load Balancer
+1) Create EC2 Instances (2 servers)
+Launch instance → Amazon Linux → t2.micro
+
+Security group:
+
+SSH (22) → your IP
+HTTP (80) → anywhere
+Run in both:
+
+sudo su
+yum update -y
+yum install httpd -y
+systemctl start httpd
+systemctl enable httpd
+Server 1:
+
+echo "This is Server 1" > /var/www/html/index.html
+Server 2:
+
+echo "This is Server 2" > /var/www/html/index.html
+Result: 2 working web servers
+
+2) Create Load Balancer
+Security group: EC2 → Security Groups → Create Security Group, allow HTTP, HTTPS traffic.
+Create Load Balancer: EC2 → Load Balancers → Create Load Balancer → Application Load Balancer (everything default), select all AZ, attach the above security group.
+Create new target group: Put name, other default.
+Register targets: Attach the instances.
+Add the target group to load balancer.
+3) Test
+Copy DNS of LB
+Open in browser
+Refresh → alternates servers
+Output: traffic distributed
+Part 2: Auto Scaling
+1) Create AMI
+EC2 → Select instance
+Actions → Image → Create Image
+Name: anything
+This is your base template
+2) Create Launch Template
+EC2 → Launch Templates → Create
+
+Config:
+
+AMI → select created AMI
+Instance type → t2.micro
+Key pair → select
+Security group → allow HTTP
+3) Create Auto Scaling Group
+EC2 → Auto Scaling Groups → Create
+
+Config:
+
+Launch template → select
+VPC + subnets → select all
+4) Attach Load Balancer
+Select:
+
+Existing Load Balancer
+Target group
+Health check:
+
+Type → HTTP
+Grace period → 300 sec
+5) Set Capacity
+Desired: 2
+Min: 1
+Max: 4
+6) Create ASG
+Review → Create
+
+Part 3: Testing
+1) Check Instances
+Target group → healthy instances
+ASG → instances running
+2) Test Auto Healing
+Terminate one instance
+Result: ASG launches new instance automatically
+3) Test Load Balancing
+Open LB DNS
+Refresh
+Exp-10 — Elastic Beanstalk
+Create Elastic Beanstalk, some name.
+Create environment → Web server environment.
+Platform: Tomcat.
+Upload WAR code from: https://tomcat.apache.org/tomcat-6.0-doc/appdev/sample/
+Role: LabRole, Key pair: select.
+Configure network: VPC (default), Subnets, Enable public IP.
+Instance: t2.micro, Type: Load Balancer, Min: 1, Max: 2.
+Create.
+Open the URL (domain link).
+Upload and Deploy → Upload same with different version label, and open URL again.
+Exp-11 — Amazon Lex
+Open Lex → Create bot → Name (everything default).
+Intent → Some name → Add utterances:
+I want to book a hotel
+Book a room
+Reserve hotel
+I need a room
+Create slots:
+age → number → question
+Advanced → Branch → if {age} < 18 → message: not eligible
+More slots: city, date, nights
+Custom slot:
+Slot types → Add slot type → Add blank slot type
+RoomType: single, double, suite
+Add slot RoomType, Advanced → Slot prompts → More prompt options → Add → Add card groups → button.
+Initial Response:
+Welcome to Hotel Booking! What is your name?
+Confirmation:
+Do you want to confirm booking in {location} for {nights} nights?
+Build → Test.
+Exp-12 — Creating IAM User with Permissions
+IAM → IAM users → Create → Name → Provide user access (tick).
+Give credentials, Access: AmazonS3FullAccess.
+Login, try creating EC2 (will not happen), create bucket.
+IAM → Users → Security credentials → Create access key → CLI.
+In CMD on your system:
+aws configure
+Enter:
+
+Access Key ID
+Secret Access Key
+Default region: (e.g., ap-south-1)
+Default output: json
+Run commands:
+
+aws s3 ls
+aws s3 mb s3://your-unique-bucket-name
+aws iam list-users   (won't work)
+Exp-13 — IAM Roles
+IAM Console → Roles → Create role.
+Use case: Choose EC2.
+Permissions: AmazonS3FullAccess.
+Name (something), Create.
+Create EC2 instance normally.
+Actions → Security → Modify IAM role.
+Select EC2-S3-Role → Update.
+Connect to EC2 and run:
+aws s3 ls
+aws ec2 describe-instances   (doesn't work)
